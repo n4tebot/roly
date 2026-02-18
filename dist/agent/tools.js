@@ -7,6 +7,10 @@ import { BalanceChecker } from '../solana/balance.js';
 import { UsdcTransfer } from '../solana/transfer.js';
 import { JupiterSwap } from '../solana/jupiter.js';
 import { loadWallet } from '../identity/wallet.js';
+import { BountyScraper } from '../bounties/scraper.js';
+import { BountyEvaluator } from '../bounties/evaluator.js';
+import { BountyExecutor } from '../bounties/executor.js';
+import { BountyMonitor } from '../bounties/monitor.js';
 const execAsync = promisify(exec);
 export class AgentTools {
     config;
@@ -14,12 +18,27 @@ export class AgentTools {
     balanceChecker;
     usdcTransfer;
     jupiterSwap;
+    bountyScraper;
+    bountyEvaluator;
+    bountyExecutor;
+    bountyMonitor;
     constructor(config) {
         this.config = config;
         this.solanaClient = new SolanaClient(config);
         this.balanceChecker = new BalanceChecker(this.solanaClient);
         this.usdcTransfer = new UsdcTransfer(this.solanaClient);
         this.jupiterSwap = new JupiterSwap(this.solanaClient);
+        this.bountyScraper = new BountyScraper(config);
+        this.bountyEvaluator = new BountyEvaluator(config);
+        this.bountyExecutor = new BountyExecutor(config);
+        this.bountyMonitor = new BountyMonitor(config);
+    }
+    /**
+     * Initialize bounty system
+     */
+    async initializeBountySystem() {
+        await this.bountyScraper.initialize();
+        await this.bountyEvaluator.loadSkills();
     }
     /**
      * Execute a tool by name
@@ -49,6 +68,16 @@ export class AgentTools {
                 return await this.gitCommit(parsedInput.message);
             case 'git_status':
                 return await this.gitStatus();
+            case 'scan_bounties':
+                return await this.scanBounties();
+            case 'evaluate_bounties':
+                return await this.evaluateBounties(parsedInput.limit);
+            case 'claim_bounty':
+                return await this.claimBounty(parsedInput.bounty_id);
+            case 'execute_bounty':
+                return await this.executeBounty(parsedInput.bounty_id);
+            case 'check_bounty_status':
+                return await this.checkBountyStatus(parsedInput.bounty_id);
             default:
                 throw new Error(`Unknown tool: ${toolName}`);
         }
@@ -314,6 +343,198 @@ export class AgentTools {
         }
     }
     /**
+     * Scan for new bounties from all sources
+     */
+    async scanBounties() {
+        try {
+            const bounties = await this.bountyScraper.scrapeAllBounties();
+            return {
+                success: true,
+                bounties_found: bounties.length,
+                bounties: bounties.slice(0, 10), // Return first 10 for overview
+                sources: {
+                    superteam: bounties.filter(b => b.source === 'superteam').length,
+                    github: bounties.filter(b => b.source === 'github').length
+                }
+            };
+        }
+        catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error)
+            };
+        }
+    }
+    /**
+     * Evaluate and rank available bounties
+     */
+    async evaluateBounties(limit = 10) {
+        try {
+            const openBounties = await this.bountyScraper.getBounties('open', undefined, 50);
+            const evaluations = await this.bountyEvaluator.evaluateBounties(openBounties);
+            const topBounties = evaluations.slice(0, limit);
+            return {
+                success: true,
+                total_evaluated: evaluations.length,
+                top_bounties: topBounties.map(e => ({
+                    id: e.bounty.id,
+                    title: e.bounty.title,
+                    source: e.bounty.source,
+                    score: e.score,
+                    difficulty: e.difficulty,
+                    roi: e.roi,
+                    skills_match: e.skillsMatch,
+                    estimated_hours: e.estimatedHours,
+                    reward: `${e.bounty.reward_amount / 1_000_000} ${e.bounty.reward_token}`,
+                    recommended: e.recommended,
+                    reasoning: e.reasoning.slice(0, 3) // Top 3 reasons
+                })),
+                summary: {
+                    recommended_count: topBounties.filter(e => e.recommended).length,
+                    avg_score: topBounties.reduce((sum, e) => sum + e.score, 0) / topBounties.length,
+                    avg_roi: topBounties.reduce((sum, e) => sum + e.roi, 0) / topBounties.length
+                }
+            };
+        }
+        catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error)
+            };
+        }
+    }
+    /**
+     * Claim a specific bounty
+     */
+    async claimBounty(bountyId) {
+        try {
+            if (!bountyId) {
+                return { success: false, error: 'Bounty ID is required' };
+            }
+            // Get bounty details
+            const bounties = await this.bountyScraper.getBounties('open');
+            const bounty = bounties.find(b => b.id === bountyId);
+            if (!bounty) {
+                return { success: false, error: 'Bounty not found or not available' };
+            }
+            // Update status to claimed
+            await this.bountyScraper.updateBountyStatus(bountyId, 'claimed', new Date());
+            return {
+                success: true,
+                bounty_id: bountyId,
+                title: bounty.title,
+                source: bounty.source,
+                reward: `${bounty.reward_amount / 1_000_000} ${bounty.reward_token}`,
+                claimed_at: new Date().toISOString(),
+                next_step: 'Use execute_bounty to begin work'
+            };
+        }
+        catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error)
+            };
+        }
+    }
+    /**
+     * Execute work on a claimed bounty
+     */
+    async executeBounty(bountyId) {
+        try {
+            if (!bountyId) {
+                return { success: false, error: 'Bounty ID is required' };
+            }
+            // Get bounty details
+            const bounties = await this.bountyScraper.getBounties('claimed');
+            const bounty = bounties.find(b => b.id === bountyId);
+            if (!bounty) {
+                return { success: false, error: 'Bounty not found or not claimed' };
+            }
+            // Evaluate the bounty
+            const evaluation = await this.bountyEvaluator.evaluateBounty(bounty);
+            if (!evaluation.recommended) {
+                return {
+                    success: false,
+                    error: 'Bounty evaluation suggests not to proceed',
+                    evaluation: {
+                        score: evaluation.score,
+                        reasons: evaluation.reasoning
+                    }
+                };
+            }
+            // Execute the bounty
+            console.log(`🎯 Starting bounty execution: ${bounty.title}`);
+            const result = await this.bountyExecutor.executeBounty(bounty, evaluation);
+            // Update bounty status based on execution result
+            if (result.success) {
+                await this.bountyScraper.updateBountyStatus(bountyId, 'submitted');
+                // Update agent skills based on successful completion
+                await this.bountyEvaluator.updateSkillsFromExperience(bounty, true);
+            }
+            return {
+                success: result.success,
+                bounty_id: bountyId,
+                title: bounty.title,
+                execution_time: result.totalTime,
+                cost: result.cost,
+                submission_url: result.submissionUrl,
+                learnings: result.learnings,
+                error: result.error
+            };
+        }
+        catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error)
+            };
+        }
+    }
+    /**
+     * Check status of bounties and payments
+     */
+    async checkBountyStatus(bountyId) {
+        try {
+            if (bountyId) {
+                // Check specific bounty
+                const bounties = await this.bountyScraper.getBounties(undefined, undefined, 100);
+                const bounty = bounties.find(b => b.id === bountyId);
+                if (!bounty) {
+                    return { success: false, error: 'Bounty not found' };
+                }
+                const monitorResult = await this.bountyMonitor.monitorBounty(bounty);
+                return {
+                    success: true,
+                    bounty_id: bountyId,
+                    title: bounty.title,
+                    previous_status: monitorResult.previous_status,
+                    current_status: monitorResult.current_status,
+                    changed: monitorResult.changed,
+                    notes: monitorResult.notes,
+                    last_checked: monitorResult.last_checked
+                };
+            }
+            else {
+                // Check all active bounties and payments
+                const monitorResults = await this.bountyMonitor.monitorAllBounties();
+                const payments = await this.bountyMonitor.checkForPayments();
+                const report = await this.bountyMonitor.generateMonitoringReport();
+                return {
+                    success: true,
+                    summary: report.summary,
+                    status_changes: monitorResults.filter(r => r.changed),
+                    recent_payments: payments,
+                    earnings: report.earnings
+                };
+            }
+        }
+        catch (error) {
+            return {
+                success: false,
+                error: error instanceof Error ? error.message : String(error)
+            };
+        }
+    }
+    /**
      * Get available tools list
      */
     getAvailableTools() {
@@ -328,7 +549,12 @@ export class AgentTools {
             'web_search',
             'web_fetch',
             'git_commit',
-            'git_status'
+            'git_status',
+            'scan_bounties',
+            'evaluate_bounties',
+            'claim_bounty',
+            'execute_bounty',
+            'check_bounty_status'
         ];
     }
 }

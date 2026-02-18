@@ -130,6 +130,12 @@ function generateCapabilityDescription(context: AgentContext): string {
   available.push('Balance checking');
   available.push('Git versioning');
   
+  // Bounty hunting capabilities (always available)
+  available.push('🎯 Hunt bounties from Superteam Earn and GitHub');
+  available.push('📊 Evaluate bounty difficulty and ROI');
+  available.push('⚡ Execute bounty work automatically');
+  available.push('💰 Monitor bounty payments and status');
+  
   let result = `**Model Tier:** ${capabilities.modelTier}\n\n`;
   result += `**Available Capabilities:**\n${available.map(c => `- ${c}`).join('\n')}\n\n`;
   
@@ -224,8 +230,15 @@ function generateActionGuidance(context: AgentContext): string {
     guidance.push('🔧 Priority: Debug and fix operational issues');
   }
   
-  // Available tools reminder
-  guidance.push('🔧 Available tools: check_balance, transfer_funds, trade_tokens, read_file, write_file, web_search, git_commit');
+  // Bounty hunting guidance
+  guidance.push('🎯 EARNING STRATEGY: Bounty hunting is your primary revenue source');
+  guidance.push('💡 Use scan_bounties to find new opportunities');
+  guidance.push('📊 Use evaluate_bounties to see ranked opportunities');
+  guidance.push('⚡ Use execute_bounty to complete work and earn rewards');
+  guidance.push('💰 Use check_bounty_status to monitor payments');
+  
+  // Available tools reminder  
+  guidance.push('🔧 Available tools: check_balance, transfer_funds, trade_tokens, read_file, write_file, web_search, git_commit, scan_bounties, evaluate_bounties, claim_bounty, execute_bounty, check_bounty_status');
   
   return guidance.join('\n- ');
 }

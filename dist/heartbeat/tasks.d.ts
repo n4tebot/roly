@@ -12,6 +12,9 @@ export declare class HeartbeatTasks {
     private database;
     private solanaClient;
     private balanceChecker;
+    private bountyScraper;
+    private bountyEvaluator;
+    private bountyMonitor;
     constructor(config: RolyConfig);
     /**
      * Execute all heartbeat tasks
@@ -65,6 +68,22 @@ export declare class HeartbeatTasks {
      * Check if a periodic task should run
      */
     private shouldRunPeriodicTask;
+    /**
+     * Scan for new bounties (normal operation)
+     */
+    private scanBounties;
+    /**
+     * Monitor existing bounties for status changes and payments
+     */
+    private monitorBounties;
+    /**
+     * Check active bounties status (limited compute mode)
+     */
+    private checkActiveBounties;
+    /**
+     * Emergency bounty scan for critical survival mode
+     */
+    private emergencyBountyScan;
     /**
      * Convert survival tier to number for metrics
      */

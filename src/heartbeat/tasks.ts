@@ -4,6 +4,9 @@ import { StateDatabase } from '../state/database.js';
 import { SolanaClient } from '../solana/client.js';
 import { BalanceChecker } from '../solana/balance.js';
 import { loadWallet } from '../identity/wallet.js';
+import { BountyScraper } from '../bounties/scraper.js';
+import { BountyEvaluator } from '../bounties/evaluator.js';
+import { BountyMonitor } from '../bounties/monitor.js';
 import chalk from 'chalk';
 
 export interface HeartbeatTaskResult {
@@ -19,12 +22,18 @@ export class HeartbeatTasks {
   private database: StateDatabase;
   private solanaClient: SolanaClient;
   private balanceChecker: BalanceChecker;
+  private bountyScraper: BountyScraper;
+  private bountyEvaluator: BountyEvaluator;
+  private bountyMonitor: BountyMonitor;
 
   constructor(config: RolyConfig) {
     this.config = config;
     this.database = new StateDatabase(config);
     this.solanaClient = new SolanaClient(config);
     this.balanceChecker = new BalanceChecker(this.solanaClient);
+    this.bountyScraper = new BountyScraper(config);
+    this.bountyEvaluator = new BountyEvaluator(config);
+    this.bountyMonitor = new BountyMonitor(config);
   }
 
   /**
@@ -50,10 +59,16 @@ export class HeartbeatTasks {
     if (context.survival.tier === SurvivalTier.NORMAL) {
       // Full capability tasks
       results.push(await this.runTask('opportunity_scan', () => this.scanForOpportunities()));
+      results.push(await this.runTask('bounty_scan', () => this.scanBounties()));
+      results.push(await this.runTask('bounty_monitoring', () => this.monitorBounties()));
       results.push(await this.runTask('system_backup', () => this.performSystemBackup()));
     } else if (context.survival.tier === SurvivalTier.LOW_COMPUTE) {
-      // Limited tasks
+      // Limited tasks  
       results.push(await this.runTask('essential_monitor', () => this.essentialMonitoring()));
+      results.push(await this.runTask('bounty_check', () => this.checkActiveBounties()));
+    } else if (context.survival.tier === SurvivalTier.CRITICAL) {
+      // Critical survival mode - focus on earning
+      results.push(await this.runTask('emergency_bounty_scan', () => this.emergencyBountyScan()));
     }
 
     // Periodic tasks (run less frequently)
@@ -327,6 +342,154 @@ export class HeartbeatTasks {
     const offset = (hash * 60 * 1000) % intervalMs; // Offset within the interval
     
     return (now + offset) % intervalMs < (5 * 60 * 1000); // Run if within 5-minute window
+  }
+
+  /**
+   * Scan for new bounties (normal operation)
+   */
+  private async scanBounties(): Promise<any> {
+    try {
+      // Check if we should scan bounties (not too frequently)
+      if (!this.shouldRunPeriodicTask('bounty_scan', 60)) { // Every hour
+        return { skipped: true, reason: 'Too soon since last scan' };
+      }
+
+      console.log('🎯 Scanning for new bounties...');
+      const bounties = await this.bountyScraper.scrapeAllBounties();
+      
+      if (bounties.length > 0) {
+        // Evaluate top bounties
+        const evaluations = await this.bountyEvaluator.evaluateBounties(bounties.slice(0, 20));
+        const recommended = evaluations.filter(e => e.recommended);
+        
+        if (recommended.length > 0) {
+          console.log(`💡 Found ${recommended.length} recommended bounties`);
+          
+          // Auto-claim the best bounty if we don't have an active one
+          const activeBounties = await this.bountyScraper.getBounties('claimed');
+          if (activeBounties.length === 0 && recommended.length > 0) {
+            const bestBounty = recommended[0];
+            await this.bountyScraper.updateBountyStatus(bestBounty.bounty.id, 'claimed', new Date());
+            console.log(`🎯 Auto-claimed bounty: ${bestBounty.bounty.title}`);
+            
+            return {
+              bounties_found: bounties.length,
+              recommended: recommended.length,
+              auto_claimed: bestBounty.bounty.id,
+              auto_claimed_title: bestBounty.bounty.title
+            };
+          }
+        }
+      }
+
+      return {
+        bounties_found: bounties.length,
+        sources: {
+          superteam: bounties.filter(b => b.source === 'superteam').length,
+          github: bounties.filter(b => b.source === 'github').length
+        }
+      };
+    } catch (error) {
+      console.error('Error scanning bounties:', error);
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * Monitor existing bounties for status changes and payments
+   */
+  private async monitorBounties(): Promise<any> {
+    try {
+      const results = await this.bountyMonitor.monitorAllBounties();
+      const payments = await this.bountyMonitor.checkForPayments();
+      
+      const statusChanges = results.filter(r => r.changed);
+      
+      if (statusChanges.length > 0) {
+        console.log(`📊 ${statusChanges.length} bounty status changes detected`);
+      }
+      
+      if (payments.length > 0) {
+        console.log(`💰 ${payments.length} potential payments detected`);
+      }
+
+      return {
+        monitored: results.length,
+        status_changes: statusChanges.length,
+        payments_detected: payments.length,
+        total_payment_amount: payments.reduce((sum, p) => sum + p.amount, 0)
+      };
+    } catch (error) {
+      console.error('Error monitoring bounties:', error);
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * Check active bounties status (limited compute mode)
+   */
+  private async checkActiveBounties(): Promise<any> {
+    try {
+      const activeBounties = await this.bountyScraper.getBounties('claimed');
+      const submittedBounties = await this.bountyScraper.getBounties('submitted');
+      
+      // Just check for payments, skip status monitoring to save resources
+      const payments = await this.bountyMonitor.checkForPayments();
+      
+      return {
+        active_bounties: activeBounties.length,
+        submitted_bounties: submittedBounties.length,
+        payments_detected: payments.length,
+        message: 'Limited bounty monitoring active'
+      };
+    } catch (error) {
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  /**
+   * Emergency bounty scan for critical survival mode
+   */
+  private async emergencyBountyScan(): Promise<any> {
+    try {
+      console.log('🚨 Emergency bounty scan - looking for immediate earning opportunities');
+      
+      // Focus on quick, easy bounties only
+      const bounties = await this.bountyScraper.scrapeAllBounties();
+      const evaluations = await this.bountyEvaluator.evaluateBounties(bounties);
+      
+      // Filter for easy, high-ROI bounties only
+      const emergencyBounties = evaluations.filter(e => 
+        e.difficulty === 'easy' && 
+        e.roi > 2 && 
+        e.estimatedHours <= 4
+      );
+
+      if (emergencyBounties.length > 0) {
+        console.log(`⚡ Found ${emergencyBounties.length} emergency bounties`);
+        
+        // Auto-claim the best one immediately
+        const best = emergencyBounties[0];
+        await this.bountyScraper.updateBountyStatus(best.bounty.id, 'claimed', new Date());
+        
+        return {
+          emergency_bounties: emergencyBounties.length,
+          auto_claimed: best.bounty.id,
+          title: best.bounty.title,
+          estimated_hours: best.estimatedHours,
+          roi: best.roi,
+          priority: 'CRITICAL_SURVIVAL'
+        };
+      }
+
+      return {
+        emergency_bounties: 0,
+        message: 'No suitable emergency bounties found'
+      };
+    } catch (error) {
+      console.error('Emergency bounty scan failed:', error);
+      return { error: error instanceof Error ? error.message : String(error) };
+    }
   }
 
   /**

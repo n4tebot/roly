@@ -5,7 +5,15 @@ export declare class AgentTools {
     private balanceChecker;
     private usdcTransfer;
     private jupiterSwap;
+    private bountyScraper;
+    private bountyEvaluator;
+    private bountyExecutor;
+    private bountyMonitor;
     constructor(config: RolyConfig);
+    /**
+     * Initialize bounty system
+     */
+    initializeBountySystem(): Promise<void>;
     /**
      * Execute a tool by name
      */
@@ -58,6 +66,26 @@ export declare class AgentTools {
      * Git status
      */
     gitStatus(): Promise<any>;
+    /**
+     * Scan for new bounties from all sources
+     */
+    scanBounties(): Promise<any>;
+    /**
+     * Evaluate and rank available bounties
+     */
+    evaluateBounties(limit?: number): Promise<any>;
+    /**
+     * Claim a specific bounty
+     */
+    claimBounty(bountyId: string): Promise<any>;
+    /**
+     * Execute work on a claimed bounty
+     */
+    executeBounty(bountyId: string): Promise<any>;
+    /**
+     * Check status of bounties and payments
+     */
+    checkBountyStatus(bountyId?: string): Promise<any>;
     /**
      * Get available tools list
      */
