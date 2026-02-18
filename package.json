@@ -1,0 +1,47 @@
+{
+  "name": "roly",
+  "version": "0.1.0",
+  "description": "Self-funding autonomous AI agent on Solana",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "test": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rm -rf dist"
+  },
+  "dependencies": {
+    "@solana/web3.js": "^1.95.0",
+    "@solana/spl-token": "^0.4.0",
+    "better-sqlite3": "^11.0.0",
+    "chalk": "^5.3.0",
+    "commander": "^12.0.0",
+    "cron-parser": "^4.9.0",
+    "gray-matter": "^4.0.3",
+    "ora": "^8.0.0",
+    "simple-git": "^3.24.0",
+    "ulid": "^2.3.0",
+    "yaml": "^2.4.0",
+    "bs58": "^6.0.0",
+    "axios": "^1.7.0",
+    "node-cron": "^3.0.3",
+    "crypto-js": "^4.2.0",
+    "table": "^6.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/crypto-js": "^4.2.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
